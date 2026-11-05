@@ -21,6 +21,25 @@ example-invalid.csv:3: duplicate value in 'sku' (first seen on line 2)
 example-invalid.csv:4: expected 3 fields, found 2
 ```
 
+## Catch changes to a published dataset
+
+Keep a header-only file in version control to describe the columns your users
+already depend on. Check every new export against it before publishing.
+
+```sh
+printf 'sku,name,stock\n' > inventory-contract.csv
+python3 csv_shape.py example.csv --baseline inventory-contract.csv --required sku --unique sku
+```
+
+If an export changes `stock` to `quantity`, the check reports both the missing
+`stock` column and the new `quantity` column. It also catches columns moved to
+a different position. This helps when downstream scripts read fields by name
+or by position. The data rows can change freely within the other rules you set.
+
+The baseline can also be a previous export. Only its first CSV or TSV record is
+used as the contract. Without `--delimiter`, the separator is inferred for each
+file separately. An explicit `--delimiter` applies to both files.
+
 ## Use in a pipeline
 
 Pass `-` to validate standard input. Diagnostics go to standard error, so the
@@ -41,7 +60,7 @@ errors, `line` is null. For TSV on standard input, pass `--delimiter tab`.
 - Input uses UTF-8, with or without a BOM. Quoted fields can contain separators and newlines.
 - Files ending in `.tsv` use tabs by default. Other files default to commas. Override the separator with `--delimiter comma`, `--delimiter tab`, or `--delimiter semicolon`.
 
-Valid files exit with status `0`. Validation or parse errors exit with status `1`. An unreadable file, invalid UTF-8, or incorrect command-line usage exits with status `2`.
+Valid files exit with status `0`. Candidate validation or parse errors exit with status `1`. An invalid baseline, unreadable file, invalid UTF-8, or incorrect command-line usage exits with status `2`.
 
 Rows are read one at a time. Each `--unique` column stores its distinct values in memory.
 

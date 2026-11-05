@@ -51,6 +51,46 @@ class ValidationTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
+    def test_baseline_reports_removed_added_and_reordered_columns(self):
+        with tempfile.TemporaryDirectory() as folder:
+            baseline = Path(folder) / "published.csv"
+            baseline.write_text("id,name,stock\n", encoding="utf-8")
+            candidate = Path(folder) / "candidate.csv"
+            candidate.write_text("stock,id,label\n12,1,Pen\n", encoding="utf-8")
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                status = main([str(candidate), "--baseline", str(baseline), "--format", "jsonl"])
+            self.assertEqual(status, 1)
+            diagnostics = [json.loads(line) for line in stderr.getvalue().splitlines()]
+            self.assertEqual(diagnostics, [
+                {"file": str(candidate), "line": 1, "message": message}
+                for message in (
+                    "baseline column 'name' is missing",
+                    "column 'label' is new relative to the baseline",
+                    "columns shared with the baseline header were reordered",
+                )
+            ])
+
+    def test_matching_baseline_header_allows_changed_rows_and_infers_delimiters(self):
+        with tempfile.TemporaryDirectory() as folder:
+            baseline = Path(folder) / "published.tsv"
+            baseline.write_text("id\tname\n1\tPen\n", encoding="utf-8-sig")
+            candidate = Path(folder) / "candidate.csv"
+            candidate.write_text("id,name\n2,Pencil\n", encoding="utf-8")
+            self.assertEqual(main([str(candidate), "--baseline", str(baseline)]), 0)
+
+    def test_invalid_baseline_is_reported_as_a_configuration_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            baseline = Path(folder) / "published.csv"
+            baseline.write_text("id,id\n", encoding="utf-8")
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                status = main(["candidate.csv", "--baseline", str(baseline)])
+            self.assertEqual(status, 2)
+            self.assertEqual(
+                stderr.getvalue(), f"{baseline}:1: invalid baseline header: duplicate column name 'id'\n",
+            )
+
     def test_tab_inference_with_utf8_bom(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "inventory.tsv"

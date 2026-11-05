@@ -12,24 +12,52 @@ import sys
 DELIMITERS = {"comma": ",", "tab": "\t", "semicolon": ";"}
 
 
-def validate(stream, delimiter, required, unique):
+def delimiter_for(path, override):
+    inferred = "tab" if path.suffix.lower() == ".tsv" else "comma"
+    return DELIMITERS[override or inferred]
+
+
+def header_issues(header, counts):
+    if not header:
+        yield "expected a header row"
+    for name, count in counts.items():
+        if not name.strip():
+            yield "column names must not be blank"
+        elif count > 1:
+            yield f"duplicate column name {name!r}"
+
+
+def header_changes(expected, actual, actual_counts):
+    expected_names = set(expected)
+    for name in expected:
+        if name not in actual_counts:
+            yield f"baseline column {name!r} is missing"
+    for name in actual:
+        if name not in expected_names:
+            yield f"column {name!r} is new relative to the baseline"
+    shared_expected = [name for name in expected if name in actual_counts]
+    shared_actual = [name for name in actual if name in expected_names]
+    if shared_expected != shared_actual:
+        yield "columns shared with the baseline header were reordered"
+
+
+def validate(stream, delimiter, required, unique, expected_header=None):
     """Yield (line number, message) pairs in file order."""
     reader = csv.reader(stream, delimiter=delimiter, strict=True)
     try:
-        header = next(reader, None)
+        header = next(reader, [])
         if not header:
             yield 1, "expected a header row"
             return
 
         headers = Counter(header)
         invalid_header = False
-        for name, count in headers.items():
-            if not name.strip():
-                yield 1, "column names must not be blank"
-                invalid_header = True
-            elif count > 1:
-                yield 1, f"duplicate column name {name!r}"
-                invalid_header = True
+        for message in header_issues(header, headers):
+            yield 1, message
+            invalid_header = True
+        if expected_header is not None and not invalid_header:
+            for message in header_changes(expected_header, header, headers):
+                yield 1, message
         for name in dict.fromkeys([*required, *unique]):
             if name not in headers:
                 yield 1, f"missing column {name!r}"
@@ -82,21 +110,41 @@ def main(argv=None):
         "--format", choices=("text", "jsonl"), default="text",
         help="write diagnostics as plain text or JSON Lines",
     )
+    parser.add_argument(
+        "--baseline", type=Path, metavar="FILE",
+        help="require the same column names and order as a reference file",
+    )
     args = parser.parse_args(argv)
     path = Path(args.file)
-    inferred = "tab" if path.suffix.lower() == ".tsv" else "comma"
-    delimiter = DELIMITERS[args.delimiter or inferred]
+    delimiter = delimiter_for(path, args.delimiter)
     required = dict.fromkeys(args.required)
     unique = dict.fromkeys(args.unique)
     label = "<stdin>" if args.file == "-" else args.file
 
-    def report(message, line=None):
+    def report(message, line=None, file=label):
         if args.format == "jsonl":
-            diagnostic = {"file": label, "line": line, "message": message}
+            diagnostic = {"file": file, "line": line, "message": message}
             print(json.dumps(diagnostic), file=sys.stderr)
         else:
-            location = f"{label}:{line}" if line is not None else label
+            location = f"{file}:{line}" if line is not None else file
             print(f"{location}: {message}", file=sys.stderr)
+
+    expected_header = None
+    if args.baseline is not None:
+        baseline_label = str(args.baseline)
+        baseline_delimiter = delimiter_for(args.baseline, args.delimiter)
+        try:
+            with args.baseline.open(encoding="utf-8-sig", newline="") as stream:
+                reader = csv.reader(stream, delimiter=baseline_delimiter, strict=True)
+                expected_header = next(reader, [])
+        except (OSError, UnicodeError, csv.Error) as error:
+            report(f"could not read baseline header: {error}", file=baseline_label)
+            return 2
+        errors = list(header_issues(expected_header, Counter(expected_header)))
+        if errors:
+            for error in errors:
+                report(f"invalid baseline header: {error}", 1, file=baseline_label)
+            return 2
 
     status = 0
     try:
@@ -105,7 +153,7 @@ def main(argv=None):
         else:
             stream = path.open(encoding="utf-8-sig", newline="")
         try:
-            for line, message in validate(stream, delimiter, required, unique):
+            for line, message in validate(stream, delimiter, required, unique, expected_header):
                 report(message, line)
                 status = 1
         finally:
