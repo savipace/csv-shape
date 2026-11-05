@@ -52,6 +52,14 @@ python3 csv_shape.py - --required sku --unique sku --format jsonl < example-inva
 Each JSON Lines diagnostic has `file`, `line`, and `message` fields. For read
 errors, `line` is null. For TSV on standard input, pass `--delimiter tab`.
 
+## Live example with USGS data
+
+The [USGS earthquake feed workflow](https://github.com/savipace/csv-shape/actions/workflows/usgs-feed.yml)
+downloads the rolling seven-day M2.5+ CSV from the [USGS Earthquake Hazards Program](https://earthquake.usgs.gov/earthquakes/feed/v1.0/csv.php).
+Before it publishes counts by UTC date in the run summary, `csv-shape` checks
+row widths, required IDs and timestamps, and duplicate IDs. A failed check
+stops the report. It runs on Mondays and can also be run on demand.
+
 ## Validation rules
 
 - The first row must contain nonblank, distinct column names. Each data row must have the same number of fields as the header.
