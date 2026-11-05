@@ -1,0 +1,58 @@
+name: USGS earthquake feed report
+
+"on":
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      FEED_URL: https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.csv
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Fetch USGS data
+        run: |
+          curl --proto '=https' --fail --silent --show-error --retry 2 \
+            --max-time 30 --max-filesize 5000000 "$FEED_URL" \
+            --output "$RUNNER_TEMP/usgs.csv"
+      - name: Validate the export
+        run: |
+          python3 csv_shape.py "$RUNNER_TEMP/usgs.csv" \
+            --required id --required time --unique id
+      - name: Publish event counts by UTC date
+        run: |
+          python3 - "$RUNNER_TEMP/usgs.csv" "$FEED_URL" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          from collections import Counter
+          import csv
+          from datetime import datetime, timezone
+          import sys
+
+          source, feed_url = sys.argv[1:]
+          with open(source, encoding="utf-8-sig", newline="") as stream:
+              by_day = Counter(
+                  datetime.fromisoformat(row["time"]).astimezone(timezone.utc).date()
+                  for row in csv.DictReader(stream)
+              )
+
+          print("## USGS M2.5+ feed")
+          print()
+          print(f"**{sum(by_day.values())} validated events** in the rolling seven-day feed.")
+          print(f"Source: [USGS CSV]({feed_url}). Events are grouped by UTC date.")
+          if by_day:
+              print()
+              print("| UTC date | Events |")
+              print("| --- | ---: |")
+              for day, count in sorted(by_day.items(), reverse=True):
+                  print(f"| {day.isoformat()} | {count} |")
+          PY
